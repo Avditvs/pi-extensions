@@ -10,8 +10,9 @@
  * do not have a Markdown agent with the same name. Project-local preset JSON
  * is intentionally not loaded.
  *
- * The `default` Markdown agent or configured preset is loaded when no CLI or
- * session preset overrides it.
+ * The active preset remains selected while Pi is running, including after
+ * `/new`. The `default` Markdown agent or configured preset is used when Pi
+ * starts without an active selection.
  *
  * Example presets.json:
  * ```json
@@ -61,7 +62,7 @@ interface Preset {
 	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Tools to enable (replaces default set) */
 	tools?: string[];
-	/** Instructions to append to system prompt */
+	/** Instructions to use as the complete system prompt */
 	instructions?: string;
 }
 
@@ -78,6 +79,11 @@ const THINKING_LEVELS = new Set<NonNullable<Preset["thinkingLevel"]>>([
 	"xhigh",
 	"max",
 ]);
+
+// `/new` can recreate the extension's per-session state. Keep the user's
+// selection at module scope so it remains available for the next session in
+// the same Pi process. This is intentionally not persisted across restarts.
+let rememberedPresetName: string | undefined;
 
 function getPresetModel(preset: Preset): { provider: string; model: string } | undefined {
 	if (preset.provider && preset.model) return { provider: preset.provider, model: preset.model };
@@ -162,7 +168,7 @@ interface OriginalState {
 
 export default function presetExtension(pi: ExtensionAPI) {
 	let presets: PresetsConfig = {};
-	let activePresetName: string | undefined;
+	let activePresetName: string | undefined = rememberedPresetName;
 	let activePreset: Preset | undefined;
 	let originalState: OriginalState | undefined;
 
@@ -226,9 +232,11 @@ export default function presetExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		// Store active preset for system prompt injection
+		// Store active preset for system prompt injection and for the next `/new`
+		// session. Do this in one place so every activation path behaves alike.
 		activePresetName = name;
 		activePreset = preset;
+		rememberedPresetName = name;
 
 		return true;
 	}
@@ -379,6 +387,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 			// Clear preset and restore original state
 			activePresetName = undefined;
 			activePreset = undefined;
+			rememberedPresetName = undefined;
 			if (originalState) {
 				if (originalState.model) {
 					await pi.setModel(originalState.model);
@@ -436,6 +445,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 		if (nextName === "(none)") {
 			activePresetName = undefined;
 			activePreset = undefined;
+			rememberedPresetName = undefined;
 			if (originalState) {
 				if (originalState.model) {
 					await pi.setModel(originalState.model);
@@ -571,22 +581,21 @@ export default function presetExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Append preset instructions to the assembled system prompt. Returning only
-	// the preset text replaces Pi's base prompt, which makes context accounting
-	// (including `/context`) disagree with the prompt sent to the model.
-	pi.on("before_agent_start", async (event) => {
+	// Replace Pi's assembled system prompt with the active preset instructions.
+	pi.on("before_agent_start", async () => {
 		if (activePreset?.instructions) {
 			return {
-				systemPrompt: `${event.systemPrompt}\n\n${activePreset.instructions}`,
+				systemPrompt: activePreset.instructions,
 			};
 		}
 	});
 
 	// Initialize on session start
 	pi.on("session_start", async (_event, ctx) => {
-		// Reset extension state before initializing the new session.
-		activePresetName = undefined;
-		activePreset = undefined;
+		// Keep the active preset in memory so it survives `/new`, but not a Pi restart.
+		// `rememberedPresetName` also covers hosts that recreate this extension on
+		// session creation.
+		activePresetName = rememberedPresetName ?? activePresetName;
 		originalState = undefined;
 
 		// Load bundled/user Markdown presets and legacy global JSON presets.
@@ -605,33 +614,18 @@ export default function presetExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		// Restore preset from session state, otherwise load the configured default.
-		const entries = ctx.sessionManager.getEntries();
-		const presetEntry = entries
-			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "preset-state")
-			.pop() as { data?: { name: string } } | undefined;
-
+		// Keep the active preset across `/new`; use the configured default otherwise.
 		if (!presetFlag) {
-			const restoredPresetName = presetEntry?.data?.name;
-			const restoredPreset = restoredPresetName ? presets[restoredPresetName] : undefined;
+			const currentPreset = activePresetName ? presets[activePresetName] : undefined;
 			const defaultPreset = presets.default;
 
-			if (restoredPresetName && restoredPreset) {
-				activePresetName = restoredPresetName;
-				activePreset = restoredPreset;
-				// Don't re-apply model/tools on restore, just keep the name for instructions.
+			if (activePresetName && currentPreset) {
+				await applyPreset(activePresetName, currentPreset, ctx);
 			} else if (defaultPreset) {
 				await applyPreset("default", defaultPreset, ctx);
 			}
 		}
 
 		updateStatus(ctx);
-	});
-
-	// Persist preset state
-	pi.on("turn_start", async () => {
-		if (activePresetName) {
-			pi.appendEntry("preset-state", { name: activePresetName });
-		}
 	});
 }
