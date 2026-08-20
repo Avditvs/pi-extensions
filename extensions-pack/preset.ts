@@ -9,7 +9,7 @@
  * - ~/.pi/agent/presets.json (global)
  * - <cwd>/.pi/presets.json (project-local)
  *
- * Built-in `default` and `plan` presets are available automatically. The
+ * Built-in `default`, `plan`, and `researcher` presets are available automatically. The
  * default preset is loaded when no CLI or session preset overrides it.
  *
  * Example presets.json:
@@ -36,6 +36,7 @@
  * - `pi --preset plan` - start with plan preset
  * - `/preset` - show selector to switch presets mid-session
  * - `/preset implement` - switch to implement preset directly
+ * - `/preset researcher` - start with the researcher preset
  * - `/preset-config [name]` - show the active or named preset configuration
  * - `Ctrl+Shift+U` - cycle through presets
  *
@@ -73,12 +74,12 @@ interface PresetsConfig {
  */
 const DEFAULT_PRESET: Preset = {
 	thinkingLevel: "medium",
-	tools: ["read", "bash", "edit", "write"],
+	tools: ["read", "bash", "edit", "write", "todo"],
 };
 
 const PLAN_PRESET: Preset = {
 	thinkingLevel: "high",
-	tools: ["read", "grep", "find", "ls"],
+	tools: ["read", "grep", "find", "ls", "todo"],
 	instructions: [
 		"You are in planning mode. Thoroughly understand the problem before proposing changes.",
 		"",
@@ -89,6 +90,21 @@ const PLAN_PRESET: Preset = {
 		"",
 		"Output a structured implementation plan with numbered steps. For each step, explain what to change and why, and list the files involved.",
 		"When the plan is complete, ask whether to write it to a markdown file or proceed to implementation.",
+	].join("\n"),
+};
+
+const RESEARCHER_PRESET: Preset = {
+	thinkingLevel: "high",
+	tools: ["todo", "read", "write", "web_search", "fetch_content", "get_search_content", "source_check"],
+	instructions: [
+		"You are in research mode. Investigate questions thoroughly using the available web search tools and keep track of useful findings with the todo tool.",
+		"",
+		"Rules:",
+		"- Search broadly, then verify important claims against reliable primary sources.",
+		"- Use read and write to capture and organize research findings when useful.",
+		"- Do not modify existing files unless explicitly asked.",
+		"",
+		"Clearly distinguish sourced facts, reasonable inferences, and unresolved uncertainty in your final summary.",
 	].join("\n"),
 };
 
@@ -124,7 +140,7 @@ function loadPresets(cwd: string): PresetsConfig {
 	}
 
 	// Merge (project overrides global, both override the built-in default).
-	return { default: DEFAULT_PRESET, plan: PLAN_PRESET, ...globalPresets, ...projectPresets };
+	return { default: DEFAULT_PRESET, plan: PLAN_PRESET, researcher: RESEARCHER_PRESET, ...globalPresets, ...projectPresets };
 }
 
 interface OriginalState {
