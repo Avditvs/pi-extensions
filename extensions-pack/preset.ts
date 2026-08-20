@@ -85,6 +85,19 @@ const THINKING_LEVELS = new Set<NonNullable<Preset["thinkingLevel"]>>([
 // the same Pi process. This is intentionally not persisted across restarts.
 let rememberedPresetName: string | undefined;
 
+// Some hosts recreate extensions without disposing their previously registered
+// event listeners. Keep this across module reloads as well: only the newest
+// instance may configure a session or supply its system prompt; otherwise an
+// old listener can inject (for example) the previously selected `worker`
+// prompt while the new instance displays default.
+type PresetExtensionLifecycle = { latestInstance: number };
+type GlobalWithPresetExtensionLifecycle = typeof globalThis & {
+	__piPresetExtensionLifecycle?: PresetExtensionLifecycle;
+};
+const globalWithPresetExtensionLifecycle = globalThis as GlobalWithPresetExtensionLifecycle;
+const presetExtensionLifecycle = globalWithPresetExtensionLifecycle.__piPresetExtensionLifecycle ??
+	(globalWithPresetExtensionLifecycle.__piPresetExtensionLifecycle = { latestInstance: 0 });
+
 function getPresetModel(preset: Preset): { provider: string; model: string } | undefined {
 	if (preset.provider && preset.model) return { provider: preset.provider, model: preset.model };
 	if (!preset.model) return undefined;
@@ -167,6 +180,9 @@ interface OriginalState {
 }
 
 export default function presetExtension(pi: ExtensionAPI) {
+	const instance = ++presetExtensionLifecycle.latestInstance;
+	const isCurrentInstance = () => instance === presetExtensionLifecycle.latestInstance;
+
 	let presets: PresetsConfig = {};
 	let activePresetName: string | undefined = rememberedPresetName;
 	let activePreset: Preset | undefined;
@@ -583,6 +599,8 @@ export default function presetExtension(pi: ExtensionAPI) {
 
 	// Replace Pi's assembled system prompt with the active preset instructions.
 	pi.on("before_agent_start", async () => {
+		if (!isCurrentInstance()) return;
+
 		if (activePreset?.instructions) {
 			return {
 				systemPrompt: activePreset.instructions,
@@ -592,6 +610,8 @@ export default function presetExtension(pi: ExtensionAPI) {
 
 	// Initialize on session start
 	pi.on("session_start", async (_event, ctx) => {
+		if (!isCurrentInstance()) return;
+
 		// Keep the active preset in memory so it survives `/new`, but not a Pi restart.
 		// `rememberedPresetName` also covers hosts that recreate this extension on
 		// session creation.
