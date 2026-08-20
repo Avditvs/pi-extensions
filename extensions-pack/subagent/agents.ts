@@ -4,6 +4,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 
 export type AgentScope = "user" | "project" | "both";
@@ -12,9 +14,11 @@ export interface AgentConfig {
 	name: string;
 	description: string;
 	tools?: string[];
+	/** Fully qualified model name, for example `anthropic/claude-sonnet-4-5`. */
 	model?: string;
+	thinkingLevel?: ThinkingLevel;
 	systemPrompt: string;
-	source: "user" | "project";
+	source: "bundled" | "user" | "project";
 	filePath: string;
 }
 
@@ -36,7 +40,22 @@ type AgentFrontmatter = {
 	description?: unknown;
 	tools?: unknown;
 	model?: unknown;
+	thinkingLevel?: unknown;
 };
+
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+function parseModel(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const model = value.trim();
+	return model || undefined;
+}
+
+function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
+	return typeof value === "string" && THINKING_LEVELS.includes(value as ThinkingLevel)
+		? (value as ThinkingLevel)
+		: undefined;
+}
 
 /**
  * Normalize a frontmatter `tools` value to a list of tool names.
@@ -59,7 +78,7 @@ function parseToolList(value: unknown): string[] | undefined {
 	return tools.length > 0 ? tools : undefined;
 }
 
-function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig[] {
+function loadAgentsFromDir(dir: string, source: AgentConfig["source"]): AgentConfig[] {
 	const agents: AgentConfig[] = [];
 
 	if (!fs.existsSync(dir)) {
@@ -85,7 +104,14 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			continue;
 		}
 
-		const { frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content);
+		let frontmatter: AgentFrontmatter;
+		let body: string;
+		try {
+			({ frontmatter, body } = parseFrontmatter<AgentFrontmatter>(content));
+		} catch (error) {
+			console.warn(`Skipping invalid agent YAML in ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+			continue;
+		}
 
 		if (typeof frontmatter.name !== "string" || typeof frontmatter.description !== "string") {
 			continue;
@@ -95,7 +121,10 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			name: frontmatter.name,
 			description: frontmatter.description,
 			tools: parseToolList(frontmatter.tools),
-			model: typeof frontmatter.model === "string" ? frontmatter.model : undefined,
+			// Preserve legacy unqualified values for subagent CLI compatibility.
+			// Presets report a warning because they cannot infer a provider safely.
+			model: parseModel(frontmatter.model),
+			thinkingLevel: parseThinkingLevel(frontmatter.thinkingLevel),
 			systemPrompt: body,
 			source,
 			filePath,
@@ -125,6 +154,10 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 	}
 }
 
+/**
+ * Discover the agents used by the subagent tool. Bundled agents are deliberately
+ * excluded: installing an extension must not change a user's dispatch list.
+ */
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
@@ -144,6 +177,18 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	}
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
+}
+
+/**
+ * Discover presets from the extension's bundled Markdown definitions and the
+ * user's shared agent directory. User definitions override bundled names.
+ */
+export function discoverPresetAgents(): AgentConfig[] {
+	const bundledDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
+	const presets = new Map<string, AgentConfig>();
+	for (const agent of loadAgentsFromDir(bundledDir, "bundled")) presets.set(agent.name, agent);
+	for (const agent of loadAgentsFromDir(path.join(getAgentDir(), "agents"), "user")) presets.set(agent.name, agent);
+	return Array.from(presets.values());
 }
 
 export function formatAgentList(agents: AgentConfig[], maxItems: number): { text: string; remaining: number } {

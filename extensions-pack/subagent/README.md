@@ -19,6 +19,9 @@ subagent/
 ├── index.ts             # The extension (entry point)
 ├── agents.ts            # Agent discovery logic
 ├── agents/              # Sample agent definitions
+│   ├── default.md       # Default interactive preset
+│   ├── plan.md          # Planning interactive preset
+│   ├── researcher.md    # Research interactive preset
 │   ├── scout.md         # Fast recon, returns compressed context
 │   ├── planner.md       # Creates implementation plans
 │   ├── reviewer.md      # Code review
@@ -34,20 +37,20 @@ subagent/
 From the repository root, symlink the files:
 
 ```bash
-# Symlink the extension (must be in a subdirectory with index.ts)
-mkdir -p ~/.pi/agent/extensions/subagent
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/index.ts" ~/.pi/agent/extensions/subagent/index.ts
-ln -sf "$(pwd)/packages/coding-agent/examples/extensions/subagent/agents.ts" ~/.pi/agent/extensions/subagent/agents.ts
+# Symlink the extension pack.
+mkdir -p ~/.pi/agent/extensions
+ln -sf "$(pwd)/extensions-pack" ~/.pi/agent/extensions/extensions-pack
 
-# Symlink agents
+# Bundled Markdown profiles are automatically available to /preset.
+# Symlink them only to make them dispatchable as subagents.
 mkdir -p ~/.pi/agent/agents
-for f in packages/coding-agent/examples/extensions/subagent/agents/*.md; do
+for f in extensions-pack/subagent/agents/*.md; do
   ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
 done
 
 # Symlink workflow prompts
 mkdir -p ~/.pi/agent/prompts
-for f in packages/coding-agent/examples/extensions/subagent/prompts/*.md; do
+for f in extensions-pack/subagent/prompts/*.md; do
   ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
 done
 ```
@@ -124,24 +127,29 @@ Use a chain: first have scout find the read tool, then have planner suggest impr
 
 ## Agent Definitions
 
-Agents are markdown files with YAML frontmatter:
+Agents are Markdown files with YAML frontmatter. The same user-level definitions power subagent dispatch and `/preset`:
 
 ```markdown
 ---
 name: my-agent
 description: What this agent does
 tools: read, grep, find, ls
-model: claude-haiku-4-5
+thinkingLevel: high
+# Optional: omit it to inherit the active session model.
+model: anthropic/claude-sonnet-4-5
 ---
 
 System prompt for the agent goes here.
 ```
 
-When `model` is omitted, the subagent inherits the dispatching session's active model and thinking level.
+`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. When `model` or `thinkingLevel` is omitted, the subagent inherits that setting from the dispatching session. An unqualified model (for example `claude-sonnet-4-5`) remains passed to the subagent CLI for legacy compatibility. `/preset` retains that value but warns that a provider/model is required, because it cannot safely select a provider.
+
+`/preset` automatically loads the bundled Markdown profiles and also loads definitions from `~/.pi/agent/agents`. Markdown agent definitions override a same-name legacy global `~/.pi/agent/presets.json` entry. Project-local `presets.json` is not loaded.
 
 **Locations:**
-- `~/.pi/agent/agents/*.md` - User-level (always loaded)
-- `.pi/agents/*.md` - Project-level (only with `agentScope: "project"` or `"both"`)
+- `extensions-pack/subagent/agents/*.md` - Bundled profiles (automatically available to `/preset`; symlink into `~/.pi/agent/agents` only to dispatch them as subagents)
+- `~/.pi/agent/agents/*.md` - User-level (always loaded; also a `/preset` source)
+- `.pi/agents/*.md` - Project-level (only with `agentScope: "project"` or `"both"`; never used by `/preset`)
 
 Project agents override user agents with the same name when `agentScope: "both"`.
 
@@ -149,10 +157,13 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 | Agent | Purpose | Model | Tools |
 |-------|---------|-------|-------|
-| `scout` | Fast codebase recon | Haiku | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Sonnet | read, grep, find, ls |
-| `reviewer` | Code review | Sonnet | read, grep, find, ls, bash |
-| `worker` | General-purpose | Sonnet | (all default) |
+| `default` | Standard interactive preset | Inherits | read, bash, edit, write, todo |
+| `plan` | Interactive planning preset | Inherits | read, grep, find, ls, todo |
+| `researcher` | Interactive research preset | Inherits | research tools, read, write, todo |
+| `scout` | Fast codebase recon | Inherits | read, grep, find, ls, bash |
+| `planner` | Implementation plans | Inherits | read, grep, find, ls |
+| `reviewer` | Code review | Inherits | read, grep, find, ls, bash |
+| `worker` | General-purpose | Inherits | (all default) |
 
 ## Workflow Prompts
 

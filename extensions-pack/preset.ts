@@ -5,12 +5,13 @@
  * and system prompt instructions. Presets are defined in JSON config files
  * and can be activated via CLI flag, /preset command, or Ctrl+Shift+U to cycle.
  *
- * Config files (merged, project takes precedence):
- * - ~/.pi/agent/presets.json (global)
- * - <cwd>/.pi/presets.json (project-local)
+ * Bundled Markdown agents and ~/.pi/agent/agents are the shared preset source.
+ * A global ~/.pi/agent/presets.json is supported only for legacy presets that
+ * do not have a Markdown agent with the same name. Project-local preset JSON
+ * is intentionally not loaded.
  *
- * Built-in `default`, `plan`, and `researcher` presets are available automatically. The
- * default preset is loaded when no CLI or session preset overrides it.
+ * The `default` Markdown agent or configured preset is loaded when no CLI or
+ * session preset overrides it.
  *
  * Example presets.json:
  * ```json
@@ -36,7 +37,6 @@
  * - `pi --preset plan` - start with plan preset
  * - `/preset` - show selector to switch presets mid-session
  * - `/preset implement` - switch to implement preset directly
- * - `/preset researcher` - start with the researcher preset
  * - `/preset-config [name]` - show the active or named preset configuration
  * - `Ctrl+Shift+U` - cycle through presets
  *
@@ -47,8 +47,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Markdown, matchesKey, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { discoverPresetAgents } from "./subagent/agents.ts";
 
 // Preset configuration
 interface Preset {
@@ -68,79 +69,89 @@ interface PresetsConfig {
 	[name: string]: Preset;
 }
 
-/**
- * Pi's built-in defaults. The model is intentionally omitted because Pi
- * resolves it from the configured provider and available authentication.
- */
-const DEFAULT_PRESET: Preset = {
-	thinkingLevel: "medium",
-	tools: ["read", "bash", "edit", "write", "todo"],
-};
+const THINKING_LEVELS = new Set<NonNullable<Preset["thinkingLevel"]>>([
+	"off",
+	"minimal",
+	"low",
+	"medium",
+	"high",
+	"xhigh",
+	"max",
+]);
 
-const PLAN_PRESET: Preset = {
-	thinkingLevel: "high",
-	tools: ["read", "grep", "find", "ls", "todo"],
-	instructions: [
-		"You are in planning mode. Thoroughly understand the problem before proposing changes.",
-		"",
-		"Rules:",
-		"- Do not modify files or run commands that change the repository.",
-		"- Read relevant files completely and explore related implementations.",
-		"- Identify risks, edge cases, dependencies, and ambiguities.",
-		"",
-		"Output a structured implementation plan with numbered steps. For each step, explain what to change and why, and list the files involved.",
-		"When the plan is complete, ask whether to write it to a markdown file or proceed to implementation.",
-	].join("\n"),
-};
+function getPresetModel(preset: Preset): { provider: string; model: string } | undefined {
+	if (preset.provider && preset.model) return { provider: preset.provider, model: preset.model };
+	if (!preset.model) return undefined;
 
-const RESEARCHER_PRESET: Preset = {
-	thinkingLevel: "high",
-	tools: ["todo", "read", "write", "web_search", "fetch_content", "get_search_content", "source_check"],
-	instructions: [
-		"You are in research mode. Investigate questions thoroughly using the available web search tools and keep track of useful findings with the todo tool.",
-		"",
-		"Rules:",
-		"- Search broadly, then verify important claims against reliable primary sources.",
-		"- Use read and write to capture and organize research findings when useful.",
-		"- Do not modify existing files unless explicitly asked.",
-		"",
-		"Clearly distinguish sourced facts, reasonable inferences, and unresolved uncertainty in your final summary.",
-	].join("\n"),
-};
+	const separator = preset.model.indexOf("/");
+	if (separator <= 0 || separator === preset.model.length - 1) return undefined;
+	return { provider: preset.model.slice(0, separator), model: preset.model.slice(separator + 1) };
+}
 
-/**
- * Load presets from config files.
- * Project-local presets override global presets with the same name.
- */
-function loadPresets(cwd: string): PresetsConfig {
-	const globalPath = join(getAgentDir(), "presets.json");
-	const projectPath = join(cwd, CONFIG_DIR_NAME, "presets.json");
+function presetFromAgent(agent: ReturnType<typeof discoverPresetAgents>[number]): Preset {
+	const preset: Preset = {
+		tools: agent.tools,
+		thinkingLevel: agent.thinkingLevel,
+		instructions: agent.systemPrompt.trim() || undefined,
+	};
 
-	let globalPresets: PresetsConfig = {};
-	let projectPresets: PresetsConfig = {};
+	// Keep the original value so applyPreset can warn about an unqualified
+	// Markdown model instead of silently treating it as absent.
+	if (agent.model) preset.model = agent.model;
+	return preset;
+}
 
-	// Load global presets
-	if (existsSync(globalPath)) {
-		try {
-			const content = readFileSync(globalPath, "utf-8");
-			globalPresets = JSON.parse(content);
-		} catch (err) {
-			console.error(`Failed to load global presets from ${globalPath}: ${err}`);
-		}
+function validateLegacyPreset(name: string, value: unknown, filePath: string): Preset | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		console.warn(`Skipping invalid legacy preset "${name}" in ${filePath}: expected an object.`);
+		return undefined;
 	}
 
-	// Load project presets
-	if (existsSync(projectPath)) {
-		try {
-			const content = readFileSync(projectPath, "utf-8");
-			projectPresets = JSON.parse(content);
-		} catch (err) {
-			console.error(`Failed to load project presets from ${projectPath}: ${err}`);
-		}
+	const entry = value as Record<string, unknown>;
+	const isString = (field: "provider" | "model" | "instructions") =>
+		entry[field] === undefined || typeof entry[field] === "string";
+	const validTools = entry.tools === undefined || (Array.isArray(entry.tools) && entry.tools.every((tool) => typeof tool === "string"));
+	const validThinking = entry.thinkingLevel === undefined ||
+		(typeof entry.thinkingLevel === "string" && THINKING_LEVELS.has(entry.thinkingLevel as Preset["thinkingLevel"]));
+	if (!isString("provider") || !isString("model") || !isString("instructions") || !validTools || !validThinking) {
+		console.warn(`Skipping invalid legacy preset "${name}" in ${filePath}: invalid field value.`);
+		return undefined;
 	}
 
-	// Merge (project overrides global, both override the built-in default).
-	return { default: DEFAULT_PRESET, plan: PLAN_PRESET, researcher: RESEARCHER_PRESET, ...globalPresets, ...projectPresets };
+	return {
+		provider: entry.provider as string | undefined,
+		model: entry.model as string | undefined,
+		thinkingLevel: entry.thinkingLevel as Preset["thinkingLevel"],
+		tools: entry.tools as string[] | undefined,
+		instructions: entry.instructions as string | undefined,
+	};
+}
+
+function loadLegacyPresets(filePath: string): PresetsConfig {
+	if (!existsSync(filePath)) return {};
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(filePath, "utf-8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			console.warn(`Failed to load legacy presets from ${filePath}: expected a JSON object.`);
+			return {};
+		}
+		const presets: PresetsConfig = {};
+		for (const [name, value] of Object.entries(parsed)) {
+			const preset = validateLegacyPreset(name, value, filePath);
+			if (preset) presets[name] = preset;
+		}
+		return presets;
+	} catch (error) {
+		console.warn(`Failed to load legacy presets from ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+		return {};
+	}
+}
+
+/** Load Markdown presets first; legacy global JSON only contributes new names. */
+function loadPresets(): PresetsConfig {
+	const agentPresets = Object.fromEntries(discoverPresetAgents().map((agent) => [agent.name, presetFromAgent(agent)]));
+	const legacyPresets = loadLegacyPresets(join(getAgentDir(), "presets.json"));
+	return { ...legacyPresets, ...agentPresets };
 }
 
 interface OriginalState {
@@ -174,16 +185,24 @@ export default function presetExtension(pi: ExtensionAPI) {
 			};
 		}
 
-		// Apply model if specified
-		if (preset.provider && preset.model) {
-			const model = ctx.modelRegistry.find(preset.provider, preset.model);
+		// Apply an optional qualified provider/model. Legacy unqualified models
+		// remain valid for subagents, but a preset cannot select a provider safely.
+		const presetModel = getPresetModel(preset);
+		if (preset.model && !presetModel) {
+			ctx.ui.notify(
+				`Preset "${name}": Model "${preset.model}" has no provider; use provider/model or set both provider and model.`,
+				"warning",
+			);
+		}
+		if (presetModel) {
+			const model = ctx.modelRegistry.find(presetModel.provider, presetModel.model);
 			if (model) {
 				const success = await pi.setModel(model);
 				if (!success) {
-					ctx.ui.notify(`Preset "${name}": No API key for ${preset.provider}/${preset.model}`, "warning");
+					ctx.ui.notify(`Preset "${name}": No API key for ${presetModel.provider}/${presetModel.model}`, "warning");
 				}
 			} else {
-				ctx.ui.notify(`Preset "${name}": Model ${preset.provider}/${preset.model} not found`, "warning");
+				ctx.ui.notify(`Preset "${name}": Model ${presetModel.provider}/${presetModel.model} not found`, "warning");
 			}
 		}
 
@@ -215,13 +234,24 @@ export default function presetExtension(pi: ExtensionAPI) {
 	}
 
 	/**
+	 * Reload preset configuration so changes are visible without restarting Pi.
+	 */
+	function refreshPresets(ctx: ExtensionContext): void {
+		presets = loadPresets();
+		if (activePresetName) {
+			activePreset = presets[activePresetName];
+		}
+	}
+
+	/**
 	 * Build description string for a preset.
 	 */
 	function buildPresetDescription(preset: Preset): string {
 		const parts: string[] = [];
 
-		if (preset.provider && preset.model) {
-			parts.push(`${preset.provider}/${preset.model}`);
+		const presetModel = getPresetModel(preset);
+		if (presetModel) {
+			parts.push(`${presetModel.provider}/${presetModel.model}`);
 		}
 		if (preset.thinkingLevel) {
 			parts.push(`thinking:${preset.thinkingLevel}`);
@@ -242,11 +272,12 @@ export default function presetExtension(pi: ExtensionAPI) {
 	 * Show preset selector UI using custom SelectList component.
 	 */
 	async function showPresetSelector(ctx: ExtensionContext): Promise<void> {
+		refreshPresets(ctx);
 		const presetNames = Object.keys(presets);
 
 		if (presetNames.length === 0) {
 			ctx.ui.notify(
-				`No presets defined. Add presets to ${join(getAgentDir(), "presets.json")} or ${join(ctx.cwd, CONFIG_DIR_NAME, "presets.json")}`,
+				`No presets defined. Add Markdown agents to ${join(getAgentDir(), "agents")} or legacy presets to ${join(getAgentDir(), "presets.json")}.`,
 				"warning",
 			);
 			return;
@@ -386,10 +417,11 @@ export default function presetExtension(pi: ExtensionAPI) {
 	}
 
 	async function cyclePreset(ctx: ExtensionContext): Promise<void> {
+		refreshPresets(ctx);
 		const presetNames = getPresetOrder();
 		if (presetNames.length === 0) {
 			ctx.ui.notify(
-				`No presets defined. Add presets to ${join(getAgentDir(), "presets.json")} or ${join(ctx.cwd, CONFIG_DIR_NAME, "presets.json")}`,
+				`No presets defined. Add Markdown agents to ${join(getAgentDir(), "agents")} or legacy presets to ${join(getAgentDir(), "presets.json")}.`,
 				"warning",
 			);
 			return;
@@ -443,6 +475,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 	}
 
 	async function showPresetConfiguration(args: string, ctx: ExtensionContext): Promise<void> {
+		refreshPresets(ctx);
 		if (ctx.mode !== "tui") {
 			ctx.ui.notify("/preset-config requires interactive mode", "error");
 			return;
@@ -450,7 +483,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 
 		if (Object.keys(presets).length === 0) {
 			ctx.ui.notify(
-				`No presets defined. Add presets to ${join(getAgentDir(), "presets.json")} or ${join(ctx.cwd, CONFIG_DIR_NAME, "presets.json")}`,
+				`No presets defined. Add Markdown agents to ${join(getAgentDir(), "agents")} or legacy presets to ${join(getAgentDir(), "presets.json")}.`,
 				"warning",
 			);
 			return;
@@ -507,6 +540,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 	pi.registerCommand("preset", {
 		description: "Switch preset configuration",
 		handler: async (args, ctx) => {
+			refreshPresets(ctx);
 			// If preset name provided, apply directly
 			if (args?.trim()) {
 				const name = args.trim();
@@ -553,8 +587,8 @@ export default function presetExtension(pi: ExtensionAPI) {
 		activePreset = undefined;
 		originalState = undefined;
 
-		// Load presets from config files
-		presets = loadPresets(ctx.cwd);
+		// Load bundled/user Markdown presets and legacy global JSON presets.
+		presets = loadPresets();
 
 		// Check for --preset flag
 		const presetFlag = pi.getFlag("preset");
@@ -569,7 +603,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		// Restore preset from session state, otherwise load the built-in default.
+		// Restore preset from session state, otherwise load the configured default.
 		const entries = ctx.sessionManager.getEntries();
 		const presetEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "preset-state")
