@@ -9,6 +9,9 @@
  * - ~/.pi/agent/presets.json (global)
  * - <cwd>/.pi/presets.json (project-local)
  *
+ * Built-in `default` and `plan` presets are available automatically. The
+ * default preset is loaded when no CLI or session preset overrides it.
+ *
  * Example presets.json:
  * ```json
  * {
@@ -33,6 +36,7 @@
  * - `pi --preset plan` - start with plan preset
  * - `/preset` - show selector to switch presets mid-session
  * - `/preset implement` - switch to implement preset directly
+ * - `/preset-config [name]` - show the active or named preset configuration
  * - `Ctrl+Shift+U` - cycle through presets
  *
  * CLI flags always override preset values.
@@ -42,8 +46,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { Container, Key, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { CONFIG_DIR_NAME, DynamicBorder, getAgentDir, getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Key, Markdown, matchesKey, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 // Preset configuration
 interface Preset {
@@ -62,6 +66,31 @@ interface Preset {
 interface PresetsConfig {
 	[name: string]: Preset;
 }
+
+/**
+ * Pi's built-in defaults. The model is intentionally omitted because Pi
+ * resolves it from the configured provider and available authentication.
+ */
+const DEFAULT_PRESET: Preset = {
+	thinkingLevel: "medium",
+	tools: ["read", "bash", "edit", "write"],
+};
+
+const PLAN_PRESET: Preset = {
+	thinkingLevel: "high",
+	tools: ["read", "grep", "find", "ls"],
+	instructions: [
+		"You are in planning mode. Thoroughly understand the problem before proposing changes.",
+		"",
+		"Rules:",
+		"- Do not modify files or run commands that change the repository.",
+		"- Read relevant files completely and explore related implementations.",
+		"- Identify risks, edge cases, dependencies, and ambiguities.",
+		"",
+		"Output a structured implementation plan with numbered steps. For each step, explain what to change and why, and list the files involved.",
+		"When the plan is complete, ask whether to write it to a markdown file or proceed to implementation.",
+	].join("\n"),
+};
 
 /**
  * Load presets from config files.
@@ -94,8 +123,8 @@ function loadPresets(cwd: string): PresetsConfig {
 		}
 	}
 
-	// Merge (project overrides global)
-	return { ...globalPresets, ...projectPresets };
+	// Merge (project overrides global, both override the built-in default).
+	return { default: DEFAULT_PRESET, plan: PLAN_PRESET, ...globalPresets, ...projectPresets };
 }
 
 interface OriginalState {
@@ -240,14 +269,35 @@ export default function presetExtension(pi: ExtensionAPI) {
 				scrollInfo: (text) => theme.fg("dim", text),
 				noMatch: (text) => theme.fg("warning", text),
 			});
+			let promptExpanded = false;
+			const promptTitle = new Text("", 1, 0);
+			const promptText = new Text("", 1, 0);
+
+			const updateExpandedPrompt = () => {
+				const selectedItem = selectList.getSelectedItem();
+				const preset = selectedItem ? presets[selectedItem.value] : undefined;
+				if (promptExpanded && selectedItem && preset?.instructions) {
+					promptTitle.setText(theme.fg("accent", theme.bold(`Custom prompt: ${selectedItem.value}`)));
+					promptText.setText(preset.instructions);
+				} else {
+					promptTitle.setText("");
+					promptText.setText("");
+				}
+			};
 
 			selectList.onSelect = (item) => done(item.value);
 			selectList.onCancel = () => done(null);
+			selectList.onSelectionChange = () => {
+				promptExpanded = false;
+				updateExpandedPrompt();
+			};
 
 			container.addChild(selectList);
+			container.addChild(promptTitle);
+			container.addChild(promptText);
 
 			// Footer hint
-			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • enter select • esc cancel")));
+			container.addChild(new Text(theme.fg("dim", "↑↓ navigate • ctrl+e expand prompt • enter select • esc cancel")));
 
 			container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
 
@@ -259,6 +309,17 @@ export default function presetExtension(pi: ExtensionAPI) {
 					container.invalidate();
 				},
 				handleInput(data: string) {
+					if (matchesKey(data, "ctrl+e")) {
+						const selectedItem = selectList.getSelectedItem();
+						const preset = selectedItem ? presets[selectedItem.value] : undefined;
+						if (preset?.instructions) {
+							promptExpanded = !promptExpanded;
+							updateExpandedPrompt();
+							tui.requestRender();
+						}
+						return;
+					}
+
 					selectList.handleInput(data);
 					tui.requestRender();
 				},
@@ -349,6 +410,76 @@ export default function presetExtension(pi: ExtensionAPI) {
 		updateStatus(ctx);
 	}
 
+	function formatPresetConfiguration(name: string, preset: Preset): string {
+		const lines = [`## ${name}${name === activePresetName ? " (active)" : ""}`, ""];
+
+		if (preset.provider !== undefined) lines.push(`- **Provider:** ${preset.provider}`);
+		if (preset.model !== undefined) lines.push(`- **Model:** ${preset.model}`);
+		if (preset.thinkingLevel !== undefined) lines.push(`- **Thinking level:** ${preset.thinkingLevel}`);
+		if (preset.tools !== undefined) lines.push(`- **Tools:** ${preset.tools.join(", ") || "(none)"}`);
+
+		if (preset.instructions !== undefined) {
+			lines.push("", "### Instructions", preset.instructions || "(empty)");
+		}
+
+		if (lines.length === 2) lines.push("(no configuration overrides)");
+		return lines.join("\n");
+	}
+
+	async function showPresetConfiguration(args: string, ctx: ExtensionContext): Promise<void> {
+		if (ctx.mode !== "tui") {
+			ctx.ui.notify("/preset-config requires interactive mode", "error");
+			return;
+		}
+
+		if (Object.keys(presets).length === 0) {
+			ctx.ui.notify(
+				`No presets defined. Add presets to ${join(getAgentDir(), "presets.json")} or ${join(ctx.cwd, CONFIG_DIR_NAME, "presets.json")}`,
+				"warning",
+			);
+			return;
+		}
+
+		const requestedName = args.trim();
+		if (requestedName && !presets[requestedName]) {
+			const available = Object.keys(presets).sort().join(", ");
+			ctx.ui.notify(`Unknown preset "${requestedName}". Available: ${available}`, "error");
+			return;
+		}
+
+		const names = requestedName
+			? [requestedName]
+			: activePresetName
+				? [activePresetName]
+				: Object.keys(presets).sort();
+		const content = names.map((name) => formatPresetConfiguration(name, presets[name]!)).join("\n\n");
+
+		await ctx.ui.custom<void>((_tui, theme, _kb, done) => {
+			const container = new Container();
+			const border = new DynamicBorder((str) => theme.fg("accent", str));
+
+			container.addChild(border);
+			container.addChild(new Text(theme.fg("accent", theme.bold("Preset Configuration")), 1, 0));
+			container.addChild(new Markdown(content, 1, 0, getMarkdownTheme()));
+			container.addChild(new Text(theme.fg("dim", "Press Enter or Esc to close"), 1, 0));
+			container.addChild(border);
+
+			return {
+				render(width: number) {
+					return container.render(width);
+				},
+				invalidate() {
+					container.invalidate();
+				},
+				handleInput(data: string) {
+					if (matchesKey(data, "enter") || matchesKey(data, "escape")) {
+						done();
+					}
+				},
+			};
+		});
+	}
+
 	pi.registerShortcut(Key.ctrlShift("u"), {
 		description: "Cycle presets",
 		handler: async (ctx) => {
@@ -382,6 +513,14 @@ export default function presetExtension(pi: ExtensionAPI) {
 		},
 	});
 
+	// Register /preset-config command
+	pi.registerCommand("preset-config", {
+		description: "Show preset configuration (usage: /preset-config [name])",
+		handler: async (args, ctx) => {
+			await showPresetConfiguration(args, ctx);
+		},
+	});
+
 	// Inject preset instructions into system prompt
 	pi.on("before_agent_start", async (event) => {
 		if (activePreset?.instructions) {
@@ -393,6 +532,11 @@ export default function presetExtension(pi: ExtensionAPI) {
 
 	// Initialize on session start
 	pi.on("session_start", async (_event, ctx) => {
+		// Reset extension state before initializing the new session.
+		activePresetName = undefined;
+		activePreset = undefined;
+		originalState = undefined;
+
 		// Load presets from config files
 		presets = loadPresets(ctx.cwd);
 
@@ -409,18 +553,23 @@ export default function presetExtension(pi: ExtensionAPI) {
 			}
 		}
 
-		// Restore preset from session state
+		// Restore preset from session state, otherwise load the built-in default.
 		const entries = ctx.sessionManager.getEntries();
 		const presetEntry = entries
 			.filter((e: { type: string; customType?: string }) => e.type === "custom" && e.customType === "preset-state")
 			.pop() as { data?: { name: string } } | undefined;
 
-		if (presetEntry?.data?.name && !presetFlag) {
-			const preset = presets[presetEntry.data.name];
-			if (preset) {
-				activePresetName = presetEntry.data.name;
-				activePreset = preset;
-				// Don't re-apply model/tools on restore, just keep the name for instructions
+		if (!presetFlag) {
+			const restoredPresetName = presetEntry?.data?.name;
+			const restoredPreset = restoredPresetName ? presets[restoredPresetName] : undefined;
+			const defaultPreset = presets.default;
+
+			if (restoredPresetName && restoredPreset) {
+				activePresetName = restoredPresetName;
+				activePreset = restoredPreset;
+				// Don't re-apply model/tools on restore, just keep the name for instructions.
+			} else if (defaultPreset) {
+				await applyPreset("default", defaultPreset, ctx);
 			}
 		}
 
