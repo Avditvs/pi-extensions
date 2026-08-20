@@ -9,6 +9,13 @@ import { existsSync } from "node:fs";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const MAX_AUTO_NAME_LENGTH = 48;
+const MAX_TITLE_PROMPT_LENGTH = 4_000;
+const TITLE_PROMPT_TRUNCATION_MARKER = "\n\n[First prompt truncated for title generation]";
+
+// Terminal/control characters are not safe in session metadata. Check the raw
+// model response before trim(), since trim() would otherwise hide some of them.
+const UNSAFE_TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
+const ANSI_ESCAPE_SEQUENCE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\))/u;
 
 type GraphemeSegmenter = {
 	segment(input: string): Iterable<{ segment: string }>;
@@ -135,14 +142,50 @@ export function createAutoSessionName(prompt: string): string | undefined {
 	return `${readable}…`;
 }
 
+function cleanGeneratedSessionName(response: string): string | undefined {
+	if (UNSAFE_TITLE_CONTROL_CHARACTERS.test(response) || ANSI_ESCAPE_SEQUENCE.test(response)) return undefined;
+
+	const raw = response.trim();
+	if (!raw || /\r(?!\n)/u.test(raw) || /\n/gu.test(raw)) return undefined;
+
+	let title = stripMarkdown(raw).replace(/\s+/gu, " ").trim();
+
+	// Do not turn an explanation into a title just because it happens to fit the
+	// length limit. These are common ways models ignore the title-only request.
+	if (/^(?:here(?:'s| is)|sure[!,]?|the (?:session )?title is|(?:session )?title\s*[:=-]|a (?:concise )?(?:session )?title (?:could be|would be)|i(?:'d| would| can)|this (?:could be|is a))\b/iu.test(title)) {
+		return undefined;
+	}
+
+	// Models occasionally wrap an otherwise valid title in quotes despite the
+	// instruction. Remove only a matching outer pair, not meaningful punctuation.
+	if ((title.startsWith('"') && title.endsWith('"')) || (title.startsWith("'") && title.endsWith("'"))) {
+		title = title.slice(1, -1).trim();
+	}
+
+	return createAutoSessionName(title);
+}
+
 export default function (pi: ExtensionAPI) {
 	// This is deliberately session-scoped state. A resumed, forked, or already
 	// populated session must never be renamed from a later prompt.
 	let canAutoName = false;
 	let firstPrompt: string | undefined;
+	let firstPromptGeneration = 0;
+	let sessionGeneration = 0;
+	let sessionIsShutDown = true;
+	let pendingTitleController: AbortController | undefined;
+
+	const isCurrentSession = (generation: number): boolean =>
+		!sessionIsShutDown && generation === sessionGeneration;
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Invalidate and cancel work belonging to the session that was replaced.
+		pendingTitleController?.abort();
+		pendingTitleController = undefined;
+		const generation = ++sessionGeneration;
+		sessionIsShutDown = false;
 		firstPrompt = undefined;
+		firstPromptGeneration = generation;
 
 		// A session file can contain entries outside the current branch, and an
 		// existing empty session still must not be renamed. New persisted
@@ -150,7 +193,19 @@ export default function (pi: ExtensionAPI) {
 		// file's existence distinguishes them from sessions selected at startup.
 		const sessionFile = ctx.sessionManager.getSessionFile();
 		const hasExistingSessionFile = sessionFile !== undefined && existsSync(sessionFile);
-		canAutoName = !pi.getSessionName() && !hasExistingSessionFile;
+		// Keep the token capture adjacent to session_start: all asynchronous title
+		// work must prove that it still belongs to this session before committing.
+		canAutoName = isCurrentSession(generation) && !pi.getSessionName() && !hasExistingSessionFile;
+	});
+
+	pi.on("session_shutdown", async () => {
+		sessionIsShutDown = true;
+		++sessionGeneration;
+		pendingTitleController?.abort();
+		pendingTitleController = undefined;
+		canAutoName = false;
+		firstPrompt = undefined;
+		firstPromptGeneration = 0;
 	});
 
 	// Capture the prompt before the agent starts, but wait until the run has
@@ -159,16 +214,95 @@ export default function (pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		if (canAutoName && firstPrompt === undefined && !pi.getSessionName()) {
 			firstPrompt = event.prompt;
+			firstPromptGeneration = sessionGeneration;
 		}
 	});
 
-	pi.on("agent_settled", async () => {
-		if (!canAutoName || firstPrompt === undefined || pi.getSessionName()) return;
+	pi.on("agent_settled", async (_event, ctx) => {
+		// Use the generation captured with the first prompt, rather than the
+		// generation current when a delayed settled event happens to run.
+		const generation = firstPromptGeneration;
+		if (!isCurrentSession(generation) || !canAutoName || firstPrompt === undefined) return;
+		if (pi.getSessionName()) return;
 
-		const name = createAutoSessionName(firstPrompt);
+		const prompt = firstPrompt;
+		// Keep the complete prompt for the deterministic local fallback, but cap
+		// the context sent to the title model so an unusually large first turn
+		// cannot create an unnecessarily large request.
+		const promptGraphemes = splitGraphemes(prompt);
+		const truncationMarkerLength = splitGraphemes(TITLE_PROMPT_TRUNCATION_MARKER).length;
+		const titlePrompt = promptGraphemes.length <= MAX_TITLE_PROMPT_LENGTH
+			? prompt
+			: `${promptGraphemes.slice(0, Math.max(0, MAX_TITLE_PROMPT_LENGTH - truncationMarkerLength)).join("")}${TITLE_PROMPT_TRUNCATION_MARKER}`;
+		// Consume the eligibility window before making the optional request. This
+		// also prevents a later queued event from issuing a second request.
 		canAutoName = false;
 		firstPrompt = undefined;
-		if (name) pi.setSessionName(name);
+
+		let name: string | undefined;
+		try {
+			// Only use the model active for this session. Falling back to the first
+			// available registry model can cross provider or bypass scopes.
+			const model = ctx.model;
+			if (model && isCurrentSession(generation)) {
+				const controller = new AbortController();
+				pendingTitleController = controller;
+				let timeout: ReturnType<typeof setTimeout> | undefined;
+				const cancellationPromise = new Promise<never>((_, reject) => {
+					controller.signal.addEventListener("abort", () => reject(new Error("Session title request cancelled")), { once: true });
+				});
+				const timeoutPromise = new Promise<never>((_, reject) => {
+					timeout = setTimeout(() => {
+						controller.abort();
+						reject(new Error("Session title request timed out"));
+					}, 15_000);
+				});
+				try {
+					const response = await Promise.race([
+						ctx.modelRegistry.complete(
+							model,
+							{
+								messages: [{
+									role: "user",
+									content: [{
+										type: "text",
+										text: `Create a concise session title based on the user's first prompt below. Return only plain text: no Markdown, no quotes, and no explanation. The title must be no more than ${MAX_AUTO_NAME_LENGTH} graphemes.\n\nFirst prompt:\n${titlePrompt}`,
+									}],
+									timestamp: Date.now(),
+								}],
+							},
+							{ maxTokens: 32, signal: controller.signal, cacheRetention: "none" },
+						),
+						timeoutPromise,
+						cancellationPromise,
+					]);
+					// Anything other than a normal stop may contain only a partial
+					// response (including an explicit abort).
+					if (response.stopReason !== "stop") throw new Error("Incomplete session title response");
+					const text = response.content
+						.filter((content): content is { type: "text"; text: string } => content.type === "text")
+						.map((content) => content.text)
+						.join("\n");
+					name = cleanGeneratedSessionName(text);
+				} finally {
+					if (timeout) clearTimeout(timeout);
+					if (pendingTitleController === controller) pendingTitleController = undefined;
+				}
+			}
+		} catch {
+			// Model, auth, cancellation, and request failures all use the local
+			// deterministic title instead.
+			name = undefined;
+		}
+
+		// The request may have completed after shutdown or a session replacement.
+		// Do not even read session metadata unless this run still owns the session.
+		if (!isCurrentSession(generation)) return;
+		name ??= createAutoSessionName(prompt);
+		if (!isCurrentSession(generation)) return;
+		const currentName = pi.getSessionName();
+		if (!isCurrentSession(generation)) return;
+		if (name && !currentName) pi.setSessionName(name);
 	});
 
 	pi.registerCommand("session-name", {

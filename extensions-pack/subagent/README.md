@@ -33,18 +33,8 @@ From the repository root, symlink the files:
 mkdir -p ~/.pi/agent/extensions
 ln -sf "$(pwd)/extensions-pack" ~/.pi/agent/extensions/extensions-pack
 
-# Bundled Markdown profiles are automatically available to /preset.
-# Symlink them only to make them dispatchable as subagents.
-mkdir -p ~/.pi/agent/agents
-for f in extensions-pack/subagent/agents/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/agents/$(basename "$f")
-done
-
-# Symlink workflow prompts
-mkdir -p ~/.pi/agent/prompts
-for f in extensions-pack/subagent/prompts/*.md; do
-  ln -sf "$(pwd)/$f" ~/.pi/agent/prompts/$(basename "$f")
-done
+# Bundled profiles and workflow prompts are loaded automatically.
+# No additional symlinks are required.
 ```
 
 ## Security Model
@@ -53,9 +43,9 @@ This tool executes a separate `pi` subprocess with a delegated system prompt and
 
 **Project-local agents** (`.pi/agents/*.md`) are repo-controlled prompts that can instruct the model to read files, run bash commands, etc.
 
-**Default behavior:** Only loads **user-level agents** from `~/.pi/agent/agents`.
+**Default behavior:** Loads the bundled agents plus **user-level agents** from `~/.pi/agent/agents`. User agents override bundled agents with the same name.
 
-To enable project-local agents, pass `agentScope: "both"` (or `"project"`). Only do this for repositories you trust.
+To enable project-local agents, pass `agentScope: "both"` (or `"project"`). Project agents override bundled and user agents with the same name. Only do this for repositories you trust.
 
 When running interactively, the tool prompts for confirmation before running project-local agents. Set `confirmProjectAgents: false` to disable.
 

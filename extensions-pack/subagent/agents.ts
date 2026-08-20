@@ -155,26 +155,23 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 }
 
 /**
- * Discover the agents used by the subagent tool. Bundled agents are deliberately
- * excluded: installing an extension must not change a user's dispatch list.
+ * Discover agents used by the subagent tool. Bundled agents are always
+ * available; user agents override bundled names, and project agents override
+ * both when their scope is enabled.
  */
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
+	const bundledDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "agents");
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
+	const bundledAgents = loadAgentsFromDir(bundledDir, "bundled");
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 
 	const agentMap = new Map<string, AgentConfig>();
-
-	if (scope === "both") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	} else if (scope === "user") {
-		for (const agent of userAgents) agentMap.set(agent.name, agent);
-	} else {
-		for (const agent of projectAgents) agentMap.set(agent.name, agent);
-	}
+	for (const agent of bundledAgents) agentMap.set(agent.name, agent);
+	for (const agent of userAgents) agentMap.set(agent.name, agent);
+	for (const agent of projectAgents) agentMap.set(agent.name, agent);
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
 }
