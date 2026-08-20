@@ -18,18 +18,10 @@ subagent/
 ├── README.md            # This file
 ├── index.ts             # The extension (entry point)
 ├── agents.ts            # Agent discovery logic
-├── agents/              # Sample agent definitions
-│   ├── default.md       # Default interactive preset
-│   ├── plan.md          # Planning interactive preset
-│   ├── researcher.md    # Research interactive preset
-│   ├── scout.md         # Fast recon, returns compressed context
-│   ├── planner.md       # Creates implementation plans
-│   ├── reviewer.md      # Code review
-│   └── worker.md        # General-purpose (full capabilities)
-└── prompts/             # Workflow presets (prompt templates)
-    ├── implement.md     # scout -> planner -> worker
-    ├── scout-and-plan.md    # scout -> planner (no implementation)
-    └── implement-and-review.md  # worker -> reviewer -> worker
+└── agents/              # Bundled agent definitions
+    ├── default.md       # Default interactive preset
+    ├── plan.md          # Planning interactive preset
+    └── worker.md        # General-purpose (full capabilities)
 ```
 
 ## Installation
@@ -71,24 +63,17 @@ When running interactively, the tool prompts for confirmation before running pro
 
 ### Single agent
 ```
-Use scout to find all authentication code
+Use worker to add input validation to API endpoints
 ```
 
 ### Parallel execution
 ```
-Run 2 scouts in parallel: one to find models, one to find providers
+Run two worker tasks in parallel: one to inspect models, one to inspect providers
 ```
 
 ### Chained workflow
 ```
-Use a chain: first have scout find the read tool, then have planner suggest improvements
-```
-
-### Workflow prompts
-```
-/implement add Redis caching to the session store
-/scout-and-plan refactor auth to support OAuth
-/implement-and-review add input validation to API endpoints
+Use a chain: first have worker inspect the read tool, then have plan propose improvements using {previous}
 ```
 
 ## Tool Modes
@@ -153,25 +138,15 @@ System prompt for the agent goes here.
 
 Project agents override user agents with the same name when `agentScope: "both"`.
 
-## Sample Agents
+## Bundled Agent Definitions
 
 | Agent | Purpose | Model | Tools |
 |-------|---------|-------|-------|
-| `default` | Standard interactive preset | Inherits | read, bash, edit, write, todo |
+| `default` | Standard interactive preset | Inherits | read, bash, edit, write, todo, subagent |
 | `plan` | Interactive planning preset | Inherits | read, grep, find, ls, todo |
-| `researcher` | Interactive research preset | Inherits | research tools, read, write, todo |
-| `scout` | Fast codebase recon | Inherits | read, grep, find, ls, bash |
-| `planner` | Implementation plans | Inherits | read, grep, find, ls |
-| `reviewer` | Code review | Inherits | read, grep, find, ls, bash |
-| `worker` | General-purpose | Inherits | (all default) |
+| `worker` | General-purpose implementation | Inherits | default child tools |
 
-## Workflow Prompts
-
-| Prompt | Flow |
-|--------|------|
-| `/implement <query>` | scout → planner → worker |
-| `/scout-and-plan <query>` | scout → planner |
-| `/implement-and-review <query>` | worker → reviewer → worker |
+You can add specialized dispatch agents under `~/.pi/agent/agents` or `.pi/agents`. See [Agent Definitions](#agent-definitions) for the Markdown format.
 
 ## Error Handling
 
