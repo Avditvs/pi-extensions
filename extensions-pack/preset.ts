@@ -571,11 +571,13 @@ export default function presetExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Inject preset instructions into system prompt
+	// Append preset instructions to the assembled system prompt. Returning only
+	// the preset text replaces Pi's base prompt, which makes context accounting
+	// (including `/context`) disagree with the prompt sent to the model.
 	pi.on("before_agent_start", async (event) => {
 		if (activePreset?.instructions) {
 			return {
-				systemPrompt: activePreset.instructions,
+				systemPrompt: `${event.systemPrompt}\n\n${activePreset.instructions}`,
 			};
 		}
 	});
