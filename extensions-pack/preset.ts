@@ -575,7 +575,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", async (event) => {
 		if (activePreset?.instructions) {
 			return {
-				systemPrompt: `${event.systemPrompt}\n\n${activePreset.instructions}`,
+				systemPrompt: activePreset.instructions,
 			};
 		}
 	});
