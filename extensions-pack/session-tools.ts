@@ -6,20 +6,16 @@
  * but are NOT persisted to tools-config.json — they last only for the
  * lifetime of the pi process.
  *
- * Also provides a /list-tools command that displays every tool available
- * to Pi, including tools registered by extensions.
- *
  * Usage:
  * - `/session-tools`              - open the interactive tool selector
  * - `/session-tools <tool>`       - quickly toggle a single tool by name
  * - `/session-tools reset`        - revert to the default tool set from config
  * - `/session-tools reset preset` - revert to the active preset's tool set
- * - `/list-tools`                 - view all tools with active state
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, matchesKey, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
+import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 
 /** Module-scoped record of the active tools when the session started. */
 let originalToolsAtSessionStart: string[] | undefined;
@@ -147,6 +143,17 @@ export default function sessionToolsExtension(pi: ExtensionAPI): void {
 			}
 		}
 
+		/** Create a themed SelectList. */
+		function makeSelectList(items: SelectItem[]): SelectList {
+			return new SelectList(items, Math.min(items.length, 16), {
+				selectedPrefix: (text) => theme.fg("accent", text),
+				selectedText: (text) => theme.fg("accent", text),
+				description: (text) => theme.fg("muted", text),
+				scrollInfo: (text) => theme.fg("dim", text),
+				noMatch: (text) => theme.fg("warning", text),
+			});
+		}
+
 		await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 			const container = new Container();
 			const border = new DynamicBorder((str) => theme.fg("accent", str));
@@ -166,41 +173,27 @@ export default function sessionToolsExtension(pi: ExtensionAPI): void {
 			container.addChild(headerText);
 			container.addChild(subtitleText);
 
-			// Create the select list — we'll replace it when items change.
-			let selectList = new SelectList(buildItems(), Math.min(buildItems().length, 16), {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
+			// Store the index where the select list lives in children[] so we
+			// can replace it in-place (addChild always appends).
+			const selectListIndex = container.children.length;
+			let selectList = makeSelectList(buildItems());
 
-			/** Rebuild the select list with fresh items, keeping the selected index. */
+			/** Rebuild the select list in-place, preserving the selected index. */
 			function rebuildSelectList(): void {
-				const selectedIndex = selectList.getSelectedItem()
-					? buildItems().findIndex((item) => item.value === selectList.getSelectedItem()!.value)
+				const selectedItem = selectList.getSelectedItem();
+				const selectedIndex = selectedItem
+					? buildItems().findIndex((item) => item.value === selectedItem.value)
 					: -1;
 
-				const newSelectList = new SelectList(buildItems(), Math.min(buildItems().length, 16), {
-					selectedPrefix: (text) => theme.fg("accent", text),
-					selectedText: (text) => theme.fg("accent", text),
-					description: (text) => theme.fg("muted", text),
-					scrollInfo: (text) => theme.fg("dim", text),
-					noMatch: (text) => theme.fg("warning", text),
-				});
-
-				// Wire up callbacks
+				const newSelectList = makeSelectList(buildItems());
 				newSelectList.onSelect = selectList.onSelect;
 				newSelectList.onCancel = selectList.onCancel;
-
-				// Preserve selected index if possible
 				if (selectedIndex >= 0) {
 					newSelectList.setSelectedIndex(selectedIndex);
 				}
 
-				// Swap in the container
-				container.removeChild(selectList);
-				container.addChild(newSelectList);
+				// Replace the select list in-place so children order is preserved.
+				container.children[selectListIndex] = newSelectList;
 				selectList = newSelectList;
 				container.invalidate();
 				tui.requestRender();
@@ -271,88 +264,6 @@ export default function sessionToolsExtension(pi: ExtensionAPI): void {
 
 		ctx.ui.notify("Session tools updated", "info");
 	}
-
-	// ── /list-tools command (read-only view) ───────────────────────
-	pi.registerCommand("list-tools", {
-		description: "List all available tools with active state",
-		handler: async (_args, ctx) => {
-			if (ctx.mode !== "tui") {
-				ctx.ui.notify("/list-tools requires interactive mode", "error");
-				return;
-			}
-
-			const tools = pi.getAllTools().sort((left, right) => left.name.localeCompare(right.name));
-			const activeTools = new Set(pi.getActiveTools());
-			const toolByName = new Map(tools.map((tool) => [tool.name, tool]));
-			const items: SelectItem[] = tools.map((tool) => ({
-				value: tool.name,
-				label: activeTools.has(tool.name) ? `✓ ${tool.name}` : `○ ${tool.name}`,
-				description: truncateDescription(tool.description ?? "No description available."),
-			}));
-
-			await ctx.ui.custom<void>((tui, theme, _kb, done) => {
-				const container = new Container();
-				container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-				container.addChild(new Text(theme.fg("accent", theme.bold("Available Tools")), 1, 0));
-
-				const selectList = new SelectList(items, Math.min(items.length, 12), {
-					selectedPrefix: (text) => theme.fg("accent", text),
-					selectedText: (text) => theme.fg("accent", text),
-					description: (text) => theme.fg("muted", text),
-					scrollInfo: (text) => theme.fg("dim", text),
-					noMatch: (text) => theme.fg("warning", text),
-				});
-				let descriptionExpanded = false;
-				const descriptionTitle = new Text("", 1, 0);
-				const descriptionText = new Text("", 1, 0);
-
-				const updateExpandedDescription = () => {
-					const selectedItem = selectList.getSelectedItem();
-					const tool = selectedItem ? toolByName.get(selectedItem.value) : undefined;
-					if (descriptionExpanded && selectedItem && tool) {
-						descriptionTitle.setText(theme.fg("accent", theme.bold(`Description: ${tool.name}`)));
-						descriptionText.setText(tool.description ?? "No description available.");
-					} else {
-						descriptionTitle.setText("");
-						descriptionText.setText("");
-					}
-				};
-
-				selectList.onSelect = () => done();
-				selectList.onCancel = () => done();
-				selectList.onSelectionChange = () => {
-					descriptionExpanded = false;
-					updateExpandedDescription();
-				};
-
-				container.addChild(selectList);
-				container.addChild(descriptionTitle);
-				container.addChild(descriptionText);
-				container.addChild(new Text(theme.fg("dim", "↑↓ navigate • ctrl+e expand description • enter or esc close")));
-				container.addChild(new DynamicBorder((str) => theme.fg("accent", str)));
-
-				return {
-					render(width: number) {
-						return container.render(width);
-					},
-					invalidate() {
-						container.invalidate();
-					},
-					handleInput(data: string) {
-						if (matchesKey(data, "ctrl+e")) {
-							descriptionExpanded = !descriptionExpanded;
-							updateExpandedDescription();
-							tui.requestRender();
-							return;
-						}
-
-						selectList.handleInput(data);
-						tui.requestRender();
-					},
-				};
-			});
-		},
-	});
 
 	// ── /session-tools command ─────────────────────────────────────
 	pi.registerCommand("session-tools", {
