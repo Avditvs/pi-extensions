@@ -143,17 +143,6 @@ export default function sessionToolsExtension(pi: ExtensionAPI): void {
 			}
 		}
 
-		/** Create a themed SelectList. */
-		function makeSelectList(items: SelectItem[]): SelectList {
-			return new SelectList(items, Math.min(items.length, 16), {
-				selectedPrefix: (text) => theme.fg("accent", text),
-				selectedText: (text) => theme.fg("accent", text),
-				description: (text) => theme.fg("muted", text),
-				scrollInfo: (text) => theme.fg("dim", text),
-				noMatch: (text) => theme.fg("warning", text),
-			});
-		}
-
 		await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
 			const container = new Container();
 			const border = new DynamicBorder((str) => theme.fg("accent", str));
@@ -172,6 +161,17 @@ export default function sessionToolsExtension(pi: ExtensionAPI): void {
 			container.addChild(border);
 			container.addChild(headerText);
 			container.addChild(subtitleText);
+
+			/** Create a themed SelectList. */
+			function makeSelectList(items: SelectItem[]): SelectList {
+				return new SelectList(items, Math.min(items.length, 16), {
+					selectedPrefix: (text) => theme.fg("accent", text),
+					selectedText: (text) => theme.fg("accent", text),
+					description: (text) => theme.fg("muted", text),
+					scrollInfo: (text) => theme.fg("dim", text),
+					noMatch: (text) => theme.fg("warning", text),
+				});
+			}
 
 			// Store the index where the select list lives in children[] so we
 			// can replace it in-place (addChild always appends).
