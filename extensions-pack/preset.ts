@@ -254,6 +254,15 @@ export default function presetExtension(pi: ExtensionAPI) {
 		activePreset = preset;
 		rememberedPresetName = name;
 
+		// Broadcast preset change for other extensions (e.g. session-tools)
+		pi.events.emit("preset:applied", {
+			name,
+			tools: preset.tools,
+			thinkingLevel: preset.thinkingLevel,
+			provider: preset.provider,
+			model: preset.model,
+		});
+
 		return true;
 	}
 
@@ -414,6 +423,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 				pi.setActiveTools(["read", "bash", "edit", "write"]);
 			}
 			ctx.ui.notify("Preset cleared, defaults restored", "info");
+			pi.events.emit("preset:applied", { name: undefined, tools: undefined });
 			updateStatus(ctx);
 			return;
 		}
@@ -471,6 +481,7 @@ export default function presetExtension(pi: ExtensionAPI) {
 			} else {
 				pi.setActiveTools(["read", "bash", "edit", "write"]);
 			}
+			pi.events.emit("preset:applied", { name: undefined, tools: undefined });
 			ctx.ui.notify("Preset cleared, defaults restored", "info");
 			updateStatus(ctx);
 			return;

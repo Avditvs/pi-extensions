@@ -1,10 +1,10 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import gitCheckpoint from "./git-checkpoint.ts";
-import listTools from "./list-tools.ts";
 import permissionGate from "./permission-gate.ts";
 import preset from "./preset.ts";
 import protectedPaths from "./protected-paths.ts";
 import sessionName from "./session-name.ts";
+import sessionTools from "./session-tools.ts";
 import subagent from "./subagent/index.ts";
 import todo from "./todo.ts";
 
@@ -21,9 +21,9 @@ export default function (pi: ExtensionAPI): void {
 	permissionGate(pi);
 	protectedPaths(pi);
 	todo(pi);
-	listTools(pi);
 	preset(pi);
 	gitCheckpoint(pi);
 	sessionName(pi);
+	sessionTools(pi);
 	subagent(pi);
 }
