@@ -62,7 +62,7 @@ interface Preset {
 	thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 	/** Tools to enable (replaces default set) */
 	tools?: string[];
-	/** Instructions to use as the complete system prompt */
+	/** Instructions to append to Pi's assembled system prompt */
 	instructions?: string;
 }
 
@@ -608,13 +608,14 @@ export default function presetExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Replace Pi's assembled system prompt with the active preset instructions.
-	pi.on("before_agent_start", async () => {
+	// Preserve Pi's assembled prompt (including skills, project context, and CLI
+	// appends used by subagents) and add the active preset instructions last.
+	pi.on("before_agent_start", async (event) => {
 		if (!isCurrentInstance()) return;
 
 		if (activePreset?.instructions) {
 			return {
-				systemPrompt: activePreset.instructions,
+				systemPrompt: `${event.systemPrompt}\n\n${activePreset.instructions}`,
 			};
 		}
 	});
