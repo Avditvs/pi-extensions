@@ -6,9 +6,11 @@ A collection of extensions for [pi](https://github.com/badlogic/pi), composed be
 
 - **Permission gate** — asks for confirmation before configured dangerous shell commands run.
 - **Protected paths** — helps prevent accidental edits to protected files.
+- **Safe find** — replaces Pi's default `find` tool to honor `.gitignore` and exclude `.git` directories.
 - **Todo** — provides an in-session todo list and the `/todos` command.
 - **Tool listing** — displays available tools and their descriptions through `/list-tools`.
 - **Presets** — loads agent presets, switches between them, and supports `/preset` and `/preset-config`.
+- **Skillset** — enables or disables individual skills for the session through `/skillset`.
 - **Git checkpoint** — creates git checkpoints during a session.
 - **Automatic session naming** — names new sessions from the first prompt while retaining `/session-name [name]` for explicit names.
 - **Subagents** — delegates work to isolated pi processes with single, parallel, and chained workflows.
@@ -49,6 +51,10 @@ After installation, use pi normally. The pack adds these notable commands:
 /preset worker               Activate the worker preset
 /preset-config               Show the active preset configuration
 /preset-config worker        Show a named preset configuration
+/skillset                    Browse and toggle skills
+/skillset pdf-tools          Toggle a single skill by name
+/skillset disable brave-search
+/skillset enable-all         Re-enable every skill
 ```
 
 Subagents can be requested in natural language, for example:
