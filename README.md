@@ -1,6 +1,6 @@
 # Pi Extensions Pack
 
-A collection of extensions for [pi](https://github.com/badlogic/pi), composed behind one auto-discovered entry point. Install the pack with a single symlink to make the included commands, tools, safeguards, and workflows available in pi.
+A collection of extensions for [pi](https://pi.dev/), composed behind one auto-discovered entry point. Install the pack with a single symlink to make the included commands, tools, safeguards, and workflows available in pi.
 
 ## Included extensions
 
@@ -18,7 +18,7 @@ The pack is composed by [`extensions-pack/index.ts`](extensions-pack/index.ts), 
 
 ## Requirements
 
-- [pi](https://github.com/badlogic/pi) installed and available on `PATH`.
+- [pi](https://pi.dev/) installed and available on `PATH`.
 - A checkout of this repository.
 - A Unix-like shell for the symlink commands below.
 
