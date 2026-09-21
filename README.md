@@ -6,9 +6,8 @@ A collection of extensions for [pi](https://github.com/badlogic/pi), composed be
 
 - **Permission gate** — asks for confirmation before configured dangerous shell commands run.
 - **Protected paths** — helps prevent accidental edits to protected files.
-- **Safe find** — replaces Pi's default `find` tool to honor `.gitignore` and exclude `.git` directories.
 - **Todo** — provides an in-session todo list and the `/todos` command.
-- **Tool listing** — displays available tools and their descriptions through `/list-tools`.
+- **Session tools** — enables or disables individual tools for the session through `/session-tools`.
 - **Presets** — loads agent presets, switches between them, and supports `/preset` and `/preset-config`.
 - **Skillset** — enables or disables individual skills for the session through `/skillset`.
 - **Git checkpoint** — creates git checkpoints during a session.
@@ -46,7 +45,10 @@ After installation, use pi normally. The pack adds these notable commands:
 /session-name                 Show the current session name
 /session-name Refactor auth   Set a session name
 /todos                       Show todos for the current branch
-/list-tools                  Browse available tools
+/session-tools              Open the interactive tool selector
+/session-tools <tool>       Toggle a single tool by name
+/session-tools reset        Revert to the default tool set from config
+/session-tools reset preset Revert to the active preset's tool set
 /preset                      Choose an agent preset
 /preset worker               Activate the worker preset
 /preset-config               Show the active preset configuration
@@ -79,6 +81,7 @@ The repository includes example preset configuration in [`.pi/presets.json`](.pi
 extensions-pack/
 ├── index.ts                 # Pack entry point
 ├── session-name.ts          # Automatic and manual session naming
+├── session-tools.ts         # Session-scoped tool selector
 ├── subagent/                # Isolated subagent dispatch and profiles
 └── ...                      # Individual extensions
 README.md

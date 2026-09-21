@@ -3,7 +3,6 @@ import gitCheckpoint from "./git-checkpoint.ts";
 import permissionGate from "./permission-gate.ts";
 import preset from "./preset.ts";
 import protectedPaths from "./protected-paths.ts";
-import safeFind from "./safe-find.ts";
 import sessionName from "./session-name.ts";
 import sessionTools from "./session-tools.ts";
 import skillset from "./skillset.ts";
