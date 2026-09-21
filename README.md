@@ -67,11 +67,67 @@ Run two worker tasks in parallel: one to inspect models, one to inspect provider
 Use a chain: first have worker inspect the read tool, then have plan propose improvements
 ```
 
+## Presets
+
+A preset configures the model (provider + model), thinking level, available tools, and extra system-prompt instructions. The pack's preset extension activates them:
+
+- `/preset` — interactive selector
+- `/preset <name>` — switch directly
+- `/preset-config [name]` — show the active or a named preset configuration
+- `Ctrl+Shift+U` — cycle through presets
+- `pi --preset <name>` — start pi with a preset
+
+CLI flags always override preset values. The active preset survives `/new` but not a pi restart.
+
+### Preset sources
+
+Presets are resolved from, in override order:
+
+1. **Bundled Markdown agents** in `extensions-pack/subagent/agents/` — always available to `/preset`.
+2. **User Markdown agents** in `~/.pi/agent/agents/` — override bundled agents with the same name.
+3. **Legacy global JSON presets** in `~/.pi/agent/presets.json` — only used when no Markdown agent has the same name.
+
+Project-local JSON presets are never loaded, and project-local Markdown agents under `.pi/agents` are only dispatched as subagents (never used by `/preset`). See [`.pi/presets.json`](.pi/presets.json) for an example legacy configuration.
+
+### Markdown agent format
+
+Markdown agent files are shared between `/preset` and the `subagent` tool:
+
+```markdown
+---
+name: my-agent
+description: What this agent does
+tools: read, grep, find, ls
+thinkingLevel: high
+model: provider/model   # optional; omit to inherit the session model
+---
+
+System prompt for the agent goes here.
+```
+
+`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. `model` should be a qualified `provider/model` pair; an unqualified model is kept for subagent dispatch but `/preset` warns that a provider is required.
+
+### Legacy JSON format
+
+`~/.pi/agent/presets.json` entries look like:
+
+```json
+{
+  "research": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "thinkingLevel": "high",
+    "tools": ["read", "grep", "web_search"],
+    "instructions": "You are in research mode..."
+  }
+}
+```
+
 ## Configuration
 
-Presets can be defined as Markdown agent profiles in `~/.pi/agent/agents`. Project-local profiles under `.pi/agents` are only loaded when a subagent request explicitly enables the `project` or `both` scope. Treat project-local profiles as repository-controlled instructions and only enable them for trusted repositories.
+Project-local profiles under `.pi/agents` are only loaded when a subagent request explicitly enables the `project` or `both` scope. Treat project-local profiles as repository-controlled instructions and only enable them for trusted repositories.
 
-The repository includes example preset configuration in [`.pi/presets.json`](.pi/presets.json). Pi's normal configuration and model settings remain responsible for authentication and provider selection.
+Pi's normal configuration and model settings remain responsible for authentication and provider selection.
 
 ## Repository layout
 

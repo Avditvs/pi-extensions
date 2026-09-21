@@ -132,9 +132,9 @@ Project agents override user agents with the same name when `agentScope: "both"`
 
 | Agent | Purpose | Model | Tools |
 |-------|---------|-------|-------|
-| `default` | Standard interactive preset | Inherits | read, bash, edit, write, todo, subagent |
-| `plan` | Interactive planning preset | Inherits | read, grep, find, ls, todo |
-| `worker` | General-purpose implementation | Inherits | default child tools |
+| `default` | Standard interactive preset | Inherits | read, bash, edit, write, find, grep, todo, subagent |
+| `plan` | Interactive planning preset | Inherits | read, grep, find, todo |
+| `worker` | General-purpose implementation | Inherits | Inherits default child tools |
 
 You can add specialized dispatch agents under `~/.pi/agent/agents` or `.pi/agents`. See [Agent Definitions](#agent-definitions) for the Markdown format.
 
