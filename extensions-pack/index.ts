@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import gitCheckpoint from "./git-checkpoint.ts";
+import openrouterCredits from "./openrouter-credits.ts";
 import permissionGate from "./permission-gate.ts";
 import preset from "./preset.ts";
 import protectedPaths from "./protected-paths.ts";
@@ -28,4 +29,5 @@ export default function (pi: ExtensionAPI): void {
 	sessionTools(pi);
 	skillset(pi);
 	subagent(pi);
+	openrouterCredits(pi);
 }

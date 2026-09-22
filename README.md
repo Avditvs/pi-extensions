@@ -13,6 +13,7 @@ A collection of extensions for [pi](https://pi.dev/), composed behind one auto-d
 - **Git checkpoint** — creates git checkpoints during a session.
 - **Automatic session naming** — names new sessions from the first prompt while retaining `/session-name [name]` for explicit names.
 - **Subagents** — delegates work to isolated pi processes with single, parallel, and chained workflows.
+- **OpenRouter credits** — shows today's OpenRouter spend and remaining credits in the status bar (refreshed each session and every 10 turns) and on demand via `/credits`.
 
 The pack is composed by [`extensions-pack/index.ts`](extensions-pack/index.ts), which is the only entry point pi needs to discover.
 
@@ -57,6 +58,7 @@ After installation, use pi normally. The pack adds these notable commands:
 /skillset pdf-tools          Toggle a single skill by name
 /skillset disable brave-search
 /skillset enable-all         Re-enable every skill
+/credits                     Show today's OpenRouter spend and remaining credits
 ```
 
 Subagents can be requested in natural language, for example:
