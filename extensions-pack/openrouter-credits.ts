@@ -8,6 +8,9 @@
  *   - GET /credits for account-wide total_credits and total_usage
  *   - GET /key     for usage_daily (spend since the UTC day boundary)
  *
+ * OpenRouter keys usage_daily to the UTC calendar day, not the local day, so the
+ * status labels the exact UTC date the figure covers to avoid any ambiguity.
+ *
  * The footer status refreshes on every new session and every 10 turns.
  */
 
@@ -28,7 +31,7 @@ interface OpenRouterCredits {
 }
 
 interface CreditSnapshot {
-	today: number;
+	utcDaily: number;
 	remaining: number;
 }
 
@@ -46,11 +49,8 @@ function extractApiKey(credential: unknown): string | undefined {
 	return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
-/** Resolve the OpenRouter API key from auth.json, then the environment. */
-async function resolveApiKey(): Promise<string | undefined> {
-	const environmentKey = process.env.OPENROUTER_API_KEY;
-	if (environmentKey) return environmentKey;
-
+/** Read the OpenRouter credential stored by pi in auth.json. */
+async function readStoredApiKey(): Promise<string | undefined> {
 	try {
 		const raw = await readFile(join(getAgentDir(), "auth.json"), "utf8");
 		const store = JSON.parse(raw) as { openrouter?: unknown };
@@ -58,6 +58,15 @@ async function resolveApiKey(): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Resolve the OpenRouter API key that pi itself uses, preferring the credential
+ * stored in auth.json and falling back to OPENROUTER_API_KEY. Preferring the
+ * environment would report usage for a different key than the one making requests.
+ */
+async function resolveApiKey(): Promise<string | undefined> {
+	return (await readStoredApiKey()) ?? process.env.OPENROUTER_API_KEY;
 }
 
 async function fetchJson<T>(url: string, apiKey: string): Promise<T> {
@@ -80,16 +89,21 @@ async function fetchDailyUsage(apiKey: string): Promise<number> {
 }
 
 async function fetchSnapshot(apiKey: string): Promise<CreditSnapshot> {
-	const [credits, today] = await Promise.all([fetchCredits(apiKey), fetchDailyUsage(apiKey)]);
-	return { today, remaining: credits.totalCredits - credits.totalUsage };
+	const [credits, utcDaily] = await Promise.all([fetchCredits(apiKey), fetchDailyUsage(apiKey)]);
+	return { utcDaily, remaining: credits.totalCredits - credits.totalUsage };
 }
 
 function formatUsd(amount: number): string {
 	return `$${amount.toFixed(4)}`;
 }
 
+/** UTC calendar day that usage_daily currently covers, e.g. "2026-09-28". */
+function formatUtcDay(now: Date = new Date()): string {
+	return `${now.toISOString().slice(0, 10)} UTC`;
+}
+
 function formatStatus(snapshot: CreditSnapshot): string {
-	return `⬡ ${formatUsd(snapshot.remaining)} · today ${formatUsd(snapshot.today)}`;
+	return `⬡ ${formatUsd(snapshot.remaining)} · ${formatUtcDay()} ${formatUsd(snapshot.utcDaily)}`;
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -120,7 +134,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("credits", {
-		description: "Show today's OpenRouter spend and remaining credits",
+		description: "Show OpenRouter's UTC-day spend and remaining credits",
 		handler: async (_args, ctx) => {
 			const apiKey = await resolveApiKey();
 			if (!apiKey) {
@@ -131,7 +145,10 @@ export default function (pi: ExtensionAPI): void {
 			try {
 				const snapshot = await fetchSnapshot(apiKey);
 				ctx.ui.setStatus(STATUS_KEY, ctx.ui.theme.fg("dim", formatStatus(snapshot)));
-				ctx.ui.notify(`OpenRouter — today ${formatUsd(snapshot.today)} · remaining ${formatUsd(snapshot.remaining)}`, "info");
+				ctx.ui.notify(
+					`OpenRouter — ${formatUtcDay()} ${formatUsd(snapshot.utcDaily)} · remaining ${formatUsd(snapshot.remaining)}`,
+					"info",
+				);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				ctx.ui.notify(`Could not fetch OpenRouter credits: ${message}`, "error");
